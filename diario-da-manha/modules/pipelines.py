@@ -4,7 +4,6 @@ from time import sleep
 import yaml
 from params.keywords import SEARCH_KEYWORDS, VALIDATION_KEYWORDS, GROUP_KEYWORDS, GROUP_VALIDATION_KEYWORDS, ACTIONS_VALIDATION_KEYWORDS, ACTIONS_KEYWORDS
 from modules.middlewares import DuplicatedUrls
-import asyncio
 
 try:
     with open ("config.yaml", "r") as f:
@@ -21,10 +20,16 @@ except FileNotFoundError as e:
     print(f"[ERRO] {e}")
 
 class ConnectionsDiario:
+    """
+    Classe que contém a conexão SSH e do MongoDB.
+    """
     def __init__(self):
         pass
     
     def connect_ssh(self):
+        """
+        Realiza conexão SSH.
+        """
         SERVER = (ssh_configs["server_ip"], ssh_configs["server_port"])
         LOCAL = (ssh_configs["local_bind_ip"], ssh_configs["local_bind_port"])
         REMOTE = (ssh_configs["remote_bind_ip"], ssh_configs["remote_bind_port"])
@@ -39,21 +44,25 @@ class ConnectionsDiario:
 
         print("[SUCESSO] Conexão SSH estabelecida")
 
-        # Retornando completo, tem que inicializar!
+        # Retornando completo, tem que inicializar (server.start())
         return self.server
 
     def connect_mongodb(self):
+        """
+        Realiza conexão com o MongoDB.
+        """
         connection_string = mongo_db_configs["uri"]
 
         self.client = MongoClient(connection_string)
 
         print("[SUCESSO] Conexão com o MongoDB estabelecida")
         
-        # Retornando completo, tem que inicializar!
+        # Retornando completo, tem que inicializar. (get_database e get_collection)
         return self.client
+    
+    def close_connection(self):
+        if self.client:
+            self.client.close()
 
-
-    def insert_news(self, database, collection, doc):
-        self.client.get_database(database).get_collection(collection).insert_one(doc)
-        
-        print(f"[SUCESSO] URL foi inserida na coleção {collection}")
+        if self.server:
+            self.server.stop()

@@ -1,4 +1,3 @@
-
 KEYWORDS = {
     'GANGS': [
         'abertos', 'aca', 'accu', 'agc', 'amigos dos amigos', 'amigos para sempre',

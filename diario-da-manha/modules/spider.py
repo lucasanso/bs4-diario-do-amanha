@@ -11,11 +11,16 @@ from pathlib import Path
 import yaml
 
 BUILD_SEARCH_PAGE = "https://www.dm.com.br/page/{}/?s={}"
-PAGES = [p for p in range (30, 50)]
-
+PAGES = [p for p in range (1, 150)]
+# É um portal que toda a implementação é linear a condição de parada pode ser determinada por um while...
 class SpiderDiario:
-    
-    def __init__(self):
+    """
+    Classe que contém a lógica principal do crawler.
+    """
+    def __init__(self) -> None:
+        """
+        Inicializa as conexões com o túnel SSH e o MongoDB.
+        """
         self.connections = ConnectionsDiario()
         self.server = self.connections.connect_ssh()
         self.server.start()
@@ -26,16 +31,18 @@ class SpiderDiario:
 
         self.start_requests()
 
-    def start_requests(self):
+    def start_requests(self) -> None:
         """
-        Função que realiza requests de cada uma das páginas de pesquisa
+        Inicia a requisição de páginas do portal Diário da Manhã de acordo com a formatação de:
+
+        BUILD_SEARCH_PAGE
 
         """
         list_seen_kwords = self.get_keywords_path()
 
         for k in SEARCH_KEYWORDS:
 
-            # Se a palavra-chave for composta, pula, porque o site não admite esse tipo de pesquisa
+            # Se a palavra-chave for composta, pula, porque a aba de buscar não admite busca por palavras-chave compostar. Ex: amigos de amigos
             if list_seen_kwords and k in list_seen_kwords:
                 print(f"[AVISO] Pulando palavra-chave: {k}")
 
@@ -55,13 +62,15 @@ class SpiderDiario:
                     response = requests.get(url_init)
                     html = BeautifulSoup(response.text, "html.parser")
 
-                    # Adicionando lógica de parar de iterar caso não encontrar mais resultados
+                    # Caso a tela de alerta seja exibida, quer dizer que não existem mais resultados, portanto iremos para a próxima
                     if html.select_one(".alert.alert-info"):
                         break
                     
+                    # Caso a próxima iteração da palavra-chave nos redirecione para a página inicial
+                    #  vai para a próxima palavra-chave
                     main = "https://www.dm.com.br/"
                     tag = html.select_one('[rel="canonical"]')
-                    # Adicionando lógica que, caso redirecionados para a página inicial, vai para a próxima palavra-chave
+
                     if tag and tag['href'] == main:
                         break
                     
@@ -83,12 +92,13 @@ class SpiderDiario:
 
         sys.exit(0)
 
-    def get_all_urls(self, html):
+    def get_all_urls(self, html: str) -> None:
         """
-        Função que pega todas as urls de cada página de pesquisa
+        Extrai todas as URLs encontradas na página de acordo com a palavra-chave e paginação.
 
+        Cada URL encontrado é adicionado numa lista para que o conteúdo seja extraído.
         Args:
-            html (str) : Conteúdo da requisição para obter cada uma das URLs
+            html (str) : Conteúdo HTMl da página.
         """
         qtd = 0
 
@@ -101,9 +111,14 @@ class SpiderDiario:
 
         print(f"[SUCESSO] Quantidade de URLs encontradas: {qtd}")
 
-    def parse(self, keyword):
+    def parse(self, keyword: str) -> None:
         """
-        Função que processa o conteúdo de uma notícia
+        Extrai todo o conteúdo de cada URL encontrada em cada página.
+
+        Nessa função é formatada a estrutura da notícia que entrará no banco.
+
+        Args:
+            keyword (str): Palavra-chave que está sendo percorrida.
         """
         for url in self.list_urls:
             if url in self.all_urls:
@@ -131,6 +146,7 @@ class SpiderDiario:
                             'tags' : {},
                             'accepted_by': {},
                             'gangs' : {},
+                            'id_event' : None,
                             'manual_relevance_class' : None
                         }
 
@@ -148,33 +164,38 @@ class SpiderDiario:
                         item["newspaper"] = "Diario do Amanha"
                         item["publication_date"] = self.extract_publication_date(html)
                         item["last_update"] = item["publication_date"]
+                        item['id_event'] = self.get_next_id_event()
 
-                        self.client.get_database("couser").get_collection("testDMok").insert_one(item)
+                        self.client.get_database("couser").get_collection("newsData").insert_one(item)
                         print(f"[SUCESSO] item aceito adicionado na coleção testDMok")
 
                     else:
                         item = {"url" : url}
             
-                        self.client.get_database("couser").get_collection("testDM").insert_one(item)
+                        self.client.get_database("couser").get_collection("unacceptedNews").insert_one(item)
                         print(f"[SUCESSO] item recusado adicionado na coleção testDM")
-
-                    # pprint(item)
         
                 except Exception as e:
                     print(f"[ERRO] Erro ao tentar fazer requisição da url {url}: {e}")
 
-    def extract_paragraph(self, article):
+    def extract_paragraph(self, article: str) -> str:
         """
-        Função que extrai o corpo-texto da notícia (parágrafos somente)
+        Extrai todos os parágrafos do corpo-texto.
+
+        Cada parágrafo do corpo-texto da notícia é concatenado com o seu sucessor.
 
         Args:
-            html (str): HTML de uma URL para percorrer parágrafos
+            html (str): HTML de uma URL para percorrer parágrafos.
+
+        Returns:
+            str: Retorna um parágrafo inteiro em formato de string.
         """
         all_paragraph = ""
 
         paragraphs = article.select(".content.mt-5 > p")
 
         for p in paragraphs:
+            # Caso o parágrafo contenha uma dessas palavras, será pulado, pois não agrega na extração da notícia.
             if re.findall(r'Foto|___|Leia|Reprodução|Vídeo', p.text):
                 continue
             all_paragraph = all_paragraph + " " + str(p.text).strip()
@@ -182,18 +203,17 @@ class SpiderDiario:
         return all_paragraph
 
 
-    def validate_article(self, article):
+    def validate_article(self, article: str) -> str:
         """
-        Função que retorna as palavras-chave de validação do corpo-texto da notícia
-
+        Verifica se o corpo-texto da notícia contém palavras-chave que fazem parte do keywords.py.
+ 
         Args:
-            article (str): Corpo-texto da notícia
+            article (str): Corpo-texto da notícia.
         
-        
+            Se o corpo-texto possuir grupo criminoso e ação de grupo criminoso, então o corpo-texto será validado.
         Returns:
-            str: String formatada contendo o par de palavras (validação | ação de grupo)
+            str: String formatada contendo o par de palavras (validação - ação de grupo).
         """
-
         group = False
         action = False
 
@@ -210,15 +230,15 @@ class SpiderDiario:
         else:
             return False
 
-    def search_gangs(self, article):
+    def search_gangs(self, article: str) -> str:
         """
-        Função que busca, utilizando expressões regulares, gangues que podem estar contidas no corpo-texto da notícia
+        Busca, utilizando regex, gangues que podem estar contidas no corpo-texto da notícia.
 
         Args:
-            article (str): Corpo-texto da notícia
+            article (str): Corpo-texto da notícia.
 
         Returns:
-            list: Lista de gangues contidas no corpo-texto
+            list: Lista de gangues contidas no corpo-texto.
         """
         list_gangs = []
 
@@ -228,15 +248,15 @@ class SpiderDiario:
 
         return list_gangs
     
-    def search_tags(self, article):
+    def search_tags(self, article: str) -> list:
         """
-        Função que busca, utilizando expressões regulares, tags no corpo-texto da notícia
+        Busca tags no corpo-texto da notícia com regex.
         
         Args:
-            article (str): Corpo-texto da notícia
+            article (str): Corpo-texto da notícia.
 
         Returns:
-            list: Lista de tags contidas no corpo-texto
+            list: Lista de tags contidas no corpo-texto.
         """
         list_tags = []
 
@@ -246,15 +266,15 @@ class SpiderDiario:
 
         return list_tags
     
-    def extract_publication_date(self, article):
+    def extract_publication_date(self, article: str) -> str:
         """
-        Função que extrai a data
+        Extrai a data da publicação da notícia.
 
         Args:
-            article (str): Corpo-texto da notícia
+            article (str): Corpo-texto da notícia.
 
         Returns:
-            date: Data de publicação da notícia
+            str: Data de publicação da notícia formatada como string.
         """
 
         date = article.select_one(".infoautor.text-left.ml-3 span").text
@@ -273,15 +293,34 @@ class SpiderDiario:
 
         return date.strip()
     
-    def process_article(self, article):
+    def process_article(self, article: str) -> str:
+        """
+        Remove o conjunto de caracteres (\\x97, \\x96) do corpo-texto da notícia.
+
+        Durante a observação de extração de notícias, foi observado que esses caracteres estavam 
+
+        poluindo o corpo-texto da notícia e, por isso, esta função foi criada.
+
+        Args:
+            article (str): Corpo-texto da notícia.
+        Returns:
+            str: Retorna a o corpo-texto limpo desses caracteres.
+        """
         if re.findall(r'\x97|\x96', article):
             article = re.sub(r'\x97|\x96', '', article)
 
         article = str(article).strip()
         return article
 
-    def get_keywords_path(self):
-        # Criar .yaml caso não existir e, ao final de cada iteração do for k in KEYWORDS adicionar essa palavra ao arquivo .yaml
+    def get_keywords_path(self) -> list:
+        """
+        Lê e retorna as palavras-chave lidas em checked_words.yaml.
+
+        Caso não exista o arquivo checked_words.yaml, este será criado.
+
+        Returns:
+            list: Uma lista contendo as palavras-chave lidas do YAML que já foram percorridas.
+        """
         list_words = []
         if os.path.exists ("checked_words.yaml") == False:
             print("[SUCESSO] Arquivo .yaml contendo as palavras-chave já percorridas foi criado")
@@ -295,14 +334,30 @@ class SpiderDiario:
             print("[SUCESSO] Retornando lista de palavras-chave já percorridas")
 
             return list_words
-        
-    def insert_keywords(self, keyword):
+    
+    def insert_keywords(self, keyword: str) -> None:
+        """
+        Salva a palavra-chave que foi completamente percorrida no arquivo checked_words.yaml
+
+        para evitar processamento desnecessário.
+
+        Args:
+            str: Palavra-chave que foi totalmente percorrida.
+        """ 
         try:
-            # w: sobrescreve, a: adiciona ao final (sacoabertos)
+            # w: sobrescreve, a: adiciona ao final (ex: abertosbolivia)
             with open("checked_words.yaml", "a") as file:
                 file.write(f"\n{keyword}")
         except FileNotFoundError as e:
             print(f"[ERRO] {e}")
 
+    def get_next_id_event(self): 
+        last_record = self.client.get_database('couser').get_collection('newsData').find_one(sort=[('id_event', -1)])
+        
+        if last_record and 'id_event' in last_record:
+            return last_record['id_event'] + 1
+            
+        # é como se tivesse um else aqui, para caso o banco esteja vazio, daí retorna 1.
+        return 1 
 if __name__ == "__main__":
     executa = SpiderDiario()
